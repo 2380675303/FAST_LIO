@@ -77,7 +77,11 @@ void Preprocess::process(const sensor_msgs::PointCloud2::ConstPtr &msg, PointClo
   case VELO16:
     velodyne_handler(msg);
     break;
-  
+
+  case RSLIDAR16:
+    rslidar16_handler(msg);
+    break;
+
   default:
     printf("Error LiDAR Type");
     break;
@@ -449,6 +453,64 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
         }
       }
     }
+}
+
+void Preprocess::rslidar16_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
+{
+  pl_surf.clear();
+  pcl::PointCloud<robosense_ros::Point> pl_orig;
+  pcl::fromROSMsg(*msg, pl_orig);
+  int plsize = pl_orig.size();
+  pl_full.reserve(plsize);
+  double timespan = pl_orig.points.end()->timestamp - msg->header.stamp.toSec();
+  double headertime = msg->header.stamp.toSec();
+  //  FIXME:  时间戳大于0.1
+  auto time_list_robosense = [&](robosense_ros::Point &point_1, robosense_ros::Point &point_2)
+  {
+    return (point_1.timestamp < point_2.timestamp);
+  };
+  sort(pl_orig.points.begin(), pl_orig.points.end(), time_list_robosense);
+  while (pl_orig.points[plsize - 1].timestamp - pl_orig.points[0].timestamp >= 0.1)
+  {
+    plsize--;
+    pl_orig.points.pop_back();
+  }
+
+  timespan = pl_orig.points.back().timestamp - pl_orig.points[0].timestamp;
+
+  // std::cout << std::setprecision(20) << timespan << std::endl;
+
+  // std::cout << pl_orig.points[1].timestamp - pl_orig.points[0].timestamp << ", "
+  //           << msg->header.stamp.toSec() - pl_orig.points[0].timestamp << ", "
+  //           << msg->header.stamp.toSec() - pl_orig.points.back().timestamp << std::endl;
+
+  for (int i = 0; i < pl_orig.points.size(); i++)
+  {
+    // if (i % point_filter_num_ != 0)
+    //     continue;
+    // note: isfinite，有限值返回true，无穷或NAN返回false
+    if (!(std::isfinite(pl_orig.points[i].x) &&
+          std::isfinite(pl_orig.points[i].y) &&
+          std::isfinite(pl_orig.points[i].z)))
+      continue;
+
+    double range = pl_orig.points[i].x * pl_orig.points[i].x + pl_orig.points[i].y * pl_orig.points[i].y +
+                   pl_orig.points[i].z * pl_orig.points[i].z;
+    if (range > 150 * 150) // TODO：yaml读取参数、添加Z轴过滤
+      continue;
+
+    PointType added_pt;
+    added_pt.x = pl_orig.points[i].x;
+    added_pt.y = pl_orig.points[i].y;
+    added_pt.z = pl_orig.points[i].z;
+    added_pt.intensity = pl_orig.points[i].intensity;
+    added_pt.normal_x = 0;
+    added_pt.normal_y = 0;
+    added_pt.normal_z = 0;
+    added_pt.curvature = pl_orig.points[i].timestamp * time_unit_scale; // curvature unit: ms
+
+    pl_surf.push_back(added_pt);
+  }
 }
 
 void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &types)
